@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Expo / React Native
+.expo/
+dist/
+
+# Logs
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# Local agent/tooling state
+.claude/
+
+# Old backup source (not versioned)
+frontend_vite_backup_src/
+
+# OS files
+.DS_Store
+Thumbs.db

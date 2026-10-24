@@ -1,0 +1,14 @@
+{
+  "name": "drysense-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DrySense Smart Solar Dehydrator IoT System - Cross Platform Expo Mobile & Web App",
+  "scripts": {
+    "start": "npm --prefix frontend start",
+    "web": "npm --prefix frontend run web",
+    "android": "npm --prefix frontend run android",
+    "ios": "npm --prefix frontend run ios",
+    "dev": "npm --prefix frontend run web",
+    "backend": "npm --prefix backend start"
+  }
+}
