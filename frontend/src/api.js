@@ -263,3 +263,44 @@ export async function fetchHealth() {
     return { ok: false }
   }
 }
+
+// ── Sensor data (DHT11 sent by the ESP32) ─────────────────────────────────────
+export async function fetchSensorData(deviceId = 'esp32-01', limit = 200) {
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 4000)
+    const q = new URLSearchParams({ deviceId, limit: String(limit) })
+    const res = await fetch(`${currentApiBase}/sensor/data?${q}`, { signal: ctrl.signal })
+    clearTimeout(t)
+    if (res.ok) return { success: true, data: await res.json() }
+    return { success: false, error: `HTTP ${res.status}` }
+  } catch (_) {
+    return { success: false, error: 'offline' }
+  }
+}
+
+export async function fetchLatestSensor(deviceId = 'esp32-01') {
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 4000)
+    const res = await fetch(`${currentApiBase}/sensor/latest?deviceId=${encodeURIComponent(deviceId)}`, { signal: ctrl.signal })
+    clearTimeout(t)
+    if (res.ok) return { success: true, data: await res.json() }
+    return { success: false, error: `HTTP ${res.status}` }
+  } catch (_) {
+    return { success: false, error: 'offline' }
+  }
+}
+
+export async function fetchSensorDevices() {
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 4000)
+    const res = await fetch(`${currentApiBase}/sensor/devices`, { signal: ctrl.signal })
+    clearTimeout(t)
+    if (res.ok) return { success: true, data: await res.json() }
+    return { success: false, data: [] }
+  } catch (_) {
+    return { success: false, data: [] }
+  }
+}

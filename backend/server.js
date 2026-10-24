@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { URL } from 'node:url'
+import { connectMongo, SensorReading, getMongoState } from './db.js'
 
 const port = Number(process.env.PORT || 4000)
+
+// ── Sensor (DHT11) helpers ───────────────────────────────────────────────────
+// A DHT11 is considered offline when its last reading is older than this.
+const SENSOR_STALE_MS = 45_000
 
 // ── Products & moisture levels ───────────────────────────────────────────────
 const PRODUCTS = ['Coconut', 'Chilli', 'Dhaal', 'Mango', 'Turmeric']
@@ -196,6 +201,99 @@ async function handle(req, res) {
     }
   }
 
+  // ── Sensor data (DHT11 from ESP32) ────────────────────────────────────────
+  // ESP32 pushes readings: POST /api/sensor/data {temperature, humidity, deviceId?}
+  if (req.method === 'POST' && url.pathname === '/api/sensor/data') {
+    if (getMongoState() !== 'connected') {
+      return err(res, 503, 'Sensor storage is not available (database not connected)')
+    }
+    const body = await readBody(req)
+    const temperature = Number(body.temperature)
+    const humidity = Number(body.humidity)
+    const deviceId = typeof body.deviceId === 'string' && body.deviceId ? body.deviceId.slice(0, 64) : 'esp32-01'
+    if (!Number.isFinite(temperature) || !Number.isFinite(humidity)) {
+      return err(res, 400, 'temperature and humidity must be numbers')
+    }
+    // DHT11 plausible range sanity check
+    if (temperature < -40 || temperature > 80) return err(res, 400, 'temperature out of DHT11 range (-40..80°C)')
+    if (humidity < 0 || humidity > 100) return err(res, 400, 'humidity out of range (0..100%)')
+    // Fabricated timestamps are accepted (e.g. the device sends buffered data)
+    let recordedAt = new Date()
+    if (body.recordedAt) {
+      const parsed = new Date(body.recordedAt)
+      if (!Number.isNaN(parsed.getTime())) recordedAt = parsed
+    }
+    const reading = await SensorReading.create({ deviceId, temperature, humidity, recordedAt })
+    return sendJson(res, 201, {
+      id: String(reading._id),
+      deviceId: reading.deviceId,
+      temperature: reading.temperature,
+      humidity: reading.humidity,
+      recordedAt: reading.recordedAt,
+    })
+  }
+
+  // Fetch readings for graphs/history: GET /api/sensor/data?deviceId=&limit=&since=
+  if (req.method === 'GET' && url.pathname === '/api/sensor/data') {
+    if (getMongoState() !== 'connected') {
+      return err(res, 503, 'Sensor storage is not available (database not connected)')
+    }
+    const deviceId = url.searchParams.get('deviceId')
+    const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 200, 1), 1000)
+    const since = url.searchParams.get('since') ? new Date(url.searchParams.get('since')) : null
+    const query = {}
+    if (deviceId) query.deviceId = deviceId
+    if (since && !Number.isNaN(since.getTime())) query.recordedAt = { $gte: since }
+    const readings = await SensorReading.find(query).sort({ recordedAt: -1 }).limit(limit).lean()
+    return sendJson(res, 200, readings.map((r) => ({
+      id: String(r._id),
+      deviceId: r.deviceId,
+      temperature: r.temperature,
+      humidity: r.humidity,
+      recordedAt: new Date(r.recordedAt).toISOString(),
+    })).reverse())
+  }
+
+  // Latest reading + device online status: GET /api/sensor/latest
+  if (req.method === 'GET' && url.pathname === '/api/sensor/latest') {
+    const state = getMongoState()
+    if (state !== 'connected') {
+      return sendJson(res, 200, { available: false, database: state })
+    }
+    const deviceId = url.searchParams.get('deviceId') || 'esp32-01'
+    const latest = await SensorReading.findOne({ deviceId }).sort({ recordedAt: -1 }).lean()
+    if (!latest) return sendJson(res, 200, { available: true, deviceId, reading: null, online: false })
+    const ageMs = Date.now() - new Date(latest.recordedAt).getTime()
+    return sendJson(res, 200, {
+      available: true,
+      deviceId,
+      reading: {
+        id: String(latest._id),
+        deviceId: latest.deviceId,
+        temperature: latest.temperature,
+        humidity: latest.humidity,
+        recordedAt: new Date(latest.recordedAt).toISOString(),
+      },
+      online: ageMs <= SENSOR_STALE_MS,
+      ageMs,
+    })
+  }
+
+  // Devices that have ever reported: GET /api/sensor/devices
+  if (req.method === 'GET' && url.pathname === '/api/sensor/devices') {
+    const state = getMongoState()
+    if (state !== 'connected') return sendJson(res, 200, [])
+    const devices = await SensorReading.aggregate([
+      { $group: { _id: '$deviceId', count: { $sum: 1 }, lastSeen: { $max: '$recordedAt' } } },
+      { $sort: { lastSeen: -1 } },
+    ])
+    return sendJson(res, 200, devices.map((d) => ({
+      deviceId: d._id,
+      readingCount: d.count,
+      lastSeen: new Date(d.lastSeen).toISOString(),
+    })))
+  }
+
   return err(res, 404, 'Route not found')
 }
 
@@ -204,3 +302,6 @@ createServer((req, res) => {
 }).listen(port, () => {
   console.log(`DrySense backend listening on http://localhost:${port}`)
 })
+
+// Connect to MongoDB (sensor storage) shortly after startup
+connectMongo()

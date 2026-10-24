@@ -5,6 +5,7 @@ import { THEME } from '../theme'
 
 const TABS = [
   { id: 'Dashboard',  label: 'Dashboard',  icon: 'home-outline',       activeIcon: 'home'        },
+  { id: 'Sensors',    label: 'Sensors',    icon: 'speedometer-outline', activeIcon: 'speedometer' },
   { id: 'Analytics',  label: 'Analytics',  icon: 'bar-chart-outline',  activeIcon: 'bar-chart'   },
   { id: 'History',    label: 'History',    icon: 'time-outline',       activeIcon: 'time'        },
 ]

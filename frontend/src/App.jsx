@@ -7,6 +7,7 @@ import { THEME } from './theme'
 import { Header } from './components/Header'
 import { BottomNavBar } from './components/BottomNavBar'
 import { DashboardTab } from './components/DashboardTab'
+import { SensorsTab } from './components/SensorsTab'
 import { AnalyticsTab } from './components/AnalyticsTab'
 import { HistoryTab } from './components/HistoryTab'
 import { Toast } from './components/Toast'
@@ -103,6 +104,9 @@ export default function App() {
           <DashboardTab
             onSessionChange={handleSessionChange}
           />
+        )}
+        {activePage === 'Sensors' && (
+          <SensorsTab refreshKey={historyRefreshKey} />
         )}
         {activePage === 'Analytics' && (
           <AnalyticsTab />

@@ -314,6 +314,179 @@ export function DetailedTelemetryChart({ readings = [], targetMoisture = 12 }) {
   )
 }
 
+// Sensor telemetry chart — temperature / humidity readings from the DHT11
+export function SensorTimeChart({ readings = [] }) {
+  const [activeSeries, setActiveSeries] = useState('temperature')
+
+  if (!readings || readings.length === 0) {
+    return (
+      <View style={styles.emptyChart}>
+        <Text style={styles.emptyText}>No sensor data received yet.</Text>
+        <Text style={styles.emptyText}>Waiting for the ESP32 to send readings…</Text>
+      </View>
+    )
+  }
+
+  const seriesMeta = {
+    temperature: { label: 'Temp', unit: '°C', color: THEME.colors.temp },
+    humidity: { label: 'Humidity', unit: '% RH', color: THEME.colors.humidity },
+  }
+
+  const current = seriesMeta[activeSeries]
+  const rawValues = readings.map((r) => r[activeSeries] ?? 0)
+  const minVal = Math.min(...rawValues)
+  const maxVal = Math.max(...rawValues)
+  const range = maxVal - minVal === 0 ? 1 : maxVal - minVal
+
+  const screenWidth = Dimensions.get('window').width
+  const chartWidth = Math.min(screenWidth - 48, 640)
+  const chartHeight = 210
+
+  const padLeft = 40
+  const padRight = 16
+  const padTop = 24
+  const padBottom = 32
+
+  const points = readings.map((r, idx) => {
+    const x = padLeft + (idx / Math.max(readings.length - 1, 1)) * (chartWidth - padLeft - padRight)
+    const val = r[activeSeries] ?? 0
+    const norm = (val - minVal) / range
+    const y = chartHeight - padBottom - norm * (chartHeight - padTop - padBottom)
+    const time = new Date(r.recordedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return { x, y, val, time, raw: r }
+  })
+
+  const polylineStr = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+  const areaPath = points.length > 0
+    ? `M ${points[0].x},${chartHeight - padBottom} L ${points.map((p) => `${p.x},${p.y}`).join(' L ')} L ${points[points.length - 1].x},${chartHeight - padBottom} Z`
+    : ''
+
+  const latestVal = rawValues[rawValues.length - 1]
+  // Show at most 6 time labels under the x axis
+  const labelEvery = Math.max(Math.ceil(points.length / 6), 1)
+
+  return (
+    <View style={styles.detailedContainer}>
+      {/* Series Selector Buttons */}
+      <View style={styles.seriesRow}>
+        <View style={styles.seriesBtnsGroup}>
+          {Object.entries(seriesMeta).map(([key, meta]) => {
+            const isSelected = activeSeries === key
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[
+                  styles.seriesButton,
+                  isSelected && { borderColor: meta.color, backgroundColor: 'rgba(255,255,255,0.06)' },
+                ]}
+                onPress={() => setActiveSeries(key)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.seriesDot, { backgroundColor: meta.color }]} />
+                <Text style={[styles.seriesButtonText, isSelected && { color: meta.color, fontWeight: '700' }]}>
+                  {meta.label}
+                </Text>
+              </TouchableOpacity>
+            )
+          })}
+        </View>
+
+        <View style={styles.latestValueBadge}>
+          <Text style={styles.latestLabel}>Latest:</Text>
+          <Text style={[styles.latestValue, { color: current.color }]}>
+            {latestVal} {current.unit}
+          </Text>
+        </View>
+      </View>
+
+      {/* SVG Chart */}
+      <View style={styles.svgWrapper}>
+        <Svg width={chartWidth} height={chartHeight} viewBox={`0 0 ${chartWidth} ${chartHeight}`}>
+          <Defs>
+            <LinearGradient id={`grad-sensor-${activeSeries}`} x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0%" stopColor={current.color} stopOpacity="0.28" />
+              <Stop offset="100%" stopColor={current.color} stopOpacity="0.0" />
+            </LinearGradient>
+          </Defs>
+
+          {/* Grid lines and Y-axis values */}
+          {[0, 0.33, 0.66, 1].map((ratio) => {
+            const y = padTop + ratio * (chartHeight - padTop - padBottom)
+            const gridVal = (maxVal - ratio * range).toFixed(1)
+            return (
+              <G key={ratio}>
+                <Line
+                  x1={padLeft}
+                  x2={chartWidth - padRight}
+                  y1={y}
+                  y2={y}
+                  stroke="rgba(255,255,255,0.07)"
+                  strokeDasharray="3 3"
+                  strokeWidth="1"
+                />
+                <SvgText
+                  x={padLeft - 6}
+                  y={y + 3.5}
+                  fill={THEME.colors.textMuted}
+                  fontSize="9"
+                  textAnchor="end"
+                >
+                  {gridVal}
+                </SvgText>
+              </G>
+            )
+          })}
+
+          {/* Gradient area */}
+          {areaPath ? <Path d={areaPath} fill={`url(#grad-sensor-${activeSeries})`} /> : null}
+
+          {/* Line */}
+          <Polyline
+            points={polylineStr}
+            fill="none"
+            stroke={current.color}
+            strokeWidth="2.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {/* Data Points — thinned when there are many readings */}
+          {points
+            .filter((_, idx) => points.length <= 24 || idx % Math.ceil(points.length / 24) === 0 || idx === points.length - 1)
+            .map((p, idx) => (
+              <G key={idx}>
+                <Circle
+                  cx={p.x}
+                  cy={p.y}
+                  r={4}
+                  fill={current.color}
+                  stroke="#ffffff"
+                  strokeWidth={1.8}
+                />
+              </G>
+            ))}
+
+          {/* X axis time labels */}
+          {points
+            .filter((p, idx) => idx % labelEvery === 0 || idx === points.length - 1)
+            .map((p, idx) => (
+              <SvgText
+                key={idx}
+                x={p.x}
+                y={chartHeight - padBottom + 16}
+                fill={THEME.colors.textMuted}
+                fontSize="9"
+                textAnchor="middle"
+              >
+                {p.time}
+              </SvgText>
+            ))}
+        </Svg>
+      </View>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   miniChartContainer: {
     marginTop: 6,
