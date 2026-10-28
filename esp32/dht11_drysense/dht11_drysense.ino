@@ -90,13 +90,20 @@ bool lcdErrorShown = false;
 // ── WiFi ─────────────────────────────────────────────────────────────────────
 void connectWiFi() {
   Serial.printf("[wifi] connecting to \"%s\"", WIFI_SSID);
+
+  // Reset any half-finished connection state first. Without this, repeated
+  // begin() calls while the station is still "connecting" are rejected with
+  // "wifi:sta is connecting, cannot set config" and never complete.
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect(false);
+  delay(200);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   // Blocking here only happens at boot / after long outages; retries are
   // non-blocking from loop() afterwards.
   unsigned long started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < 10000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - started < 12000) {
     delay(250);
     Serial.print('.');
   }
@@ -104,6 +111,7 @@ void connectWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("[wifi] connected — IP: %s\n", WiFi.localIP().toString().c_str());
+    lastWifiTry = millis();
   } else {
     Serial.println("[wifi] not connected — control logic keeps running");
   }
