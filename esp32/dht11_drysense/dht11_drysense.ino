@@ -87,6 +87,16 @@ unsigned long lastPush       = 0;
 unsigned long lastWifiTry    = 0;
 bool lcdErrorShown = false;
 
+// ── LED helpers (1 blink = one event) ────────────────────────────────────────
+void blink(int times, int onMs = 120) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(statusLedPin, HIGH);
+    delay(onMs);
+    digitalWrite(statusLedPin, LOW);
+    delay(onMs);
+  }
+}
+
 // ── WiFi ─────────────────────────────────────────────────────────────────────
 void connectWiFi() {
   Serial.printf("[wifi] connecting to \"%s\"", WIFI_SSID);
