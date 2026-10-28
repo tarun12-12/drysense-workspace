@@ -43,3 +43,12 @@ The ESP32 pushes one reading every few seconds; each is stored in the
 - `GET /api/sensor/devices` — distinct device ids with counts and lastSeen
 
 Sensor endpoints return `503` while the database is not connected.
+
+### Device command
+
+- `GET /api/device/command` — the ESP32 polls this every 5 s and runs its
+  drying-control loop **only while a session is active**:
+  `{ "running": true, "sessionId": "...", "product": "Coconut", "estimatedHours": 12 }`
+  → Start button (`POST /api/sessions`) sets it running; Stop button
+  (`PATCH /api/sessions/:id`, status `stopped`) turns everything off. A failed
+  poll never flips the device's local running state.

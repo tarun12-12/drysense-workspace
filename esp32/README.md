@@ -2,7 +2,7 @@
 
 Firmware for the DrySense dehydrator. One ESP32 does two jobs:
 
-**Local control** (runs even without WiFi):
+**Local control** (runs only while a drying session is active in the app):
 - **Fan 1** relay ON when temperature ≥ 30 °C, **bulb** relay inverse (heater while fans idle)
 - **Fan 2** relay on a fixed duty cycle: 30 s ON / 15 s OFF
 - 16×2 I²C LCD shows temperature + live relay states
@@ -10,6 +10,21 @@ Firmware for the DrySense dehydrator. One ESP32 does two jobs:
 **Cloud telemetry** (DrySense app):
 - Pushes temperature & humidity to the backend every 10 seconds
 - Data flow: `DHT11 → ESP32 → POST /api/sensor/data → MongoDB → Sensors tab graph/history`
+
+## Start / Stop flow
+
+The board polls `GET /api/device/command` every 5 seconds:
+
+1. You press **Start** in the app → backend creates a running session → the
+   device's next poll returns `running: true` → control loop + telemetry begin
+   (LCD shows `Dry: <product>`). First reading is pushed right away.
+2. You press **Stop** → session marked stopped → device stops all relays
+   (safe state), pauses telemetry, LCD shows `System Stopped`.
+3. If you power-cycle the ESP32 mid-session, it picks the running session back
+   up automatically on its first poll.
+
+A failed poll (WiFi/backend down) never changes the device's local state — the
+board keeps running until it receives an explicit stop.
 
 All timing is non-blocking (`millis()` timers), so relay control and the LCD keep
 running even when the network is down.

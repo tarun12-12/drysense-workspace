@@ -294,6 +294,20 @@ async function handle(req, res) {
     })))
   }
 
+  // ── Device command (ESP32 polls this) ─────────────────────────────────────
+  // The drying control loop only runs while a session is active in the app:
+  // Start button → POST /api/sessions (status=running) → device runs.
+  // Stop button  → PATCH /api/sessions/:id (status=stopped) → device stops.
+  if (req.method === 'GET' && url.pathname === '/api/device/command') {
+    const running = sessions.find((s) => s.status === 'running')
+    return sendJson(res, 200, {
+      running: !!running,
+      sessionId: running ? running.id : null,
+      product: running ? running.product : null,
+      estimatedHours: running ? running.estimatedHours : null,
+    })
+  }
+
   return err(res, 404, 'Route not found')
 }
 

@@ -60,10 +60,17 @@ bool fan2State = false;                              // false = OFF, true = ON
 // ── Cadences (ms) ────────────────────────────────────────────────────────────
 const unsigned long SENSOR_INTERVAL_MS = 2000;   // read DHT11 every 2 s (DHT11 needs ~1 s between reads)
 const unsigned long LCD_INTERVAL_MS    = 1000;   // refresh LCD every 1 s
+const unsigned long COMMAND_POLL_MS    = 5000;   // poll Start/Stop command from the backend every 5 s
 const unsigned long PUSH_INTERVAL_MS   = 10000;  // push a reading to the backend every 10 s
 const unsigned long WIFI_RETRY_MS      = 15000;  // attempt WiFi reconnects every 15 s
 
 DHT dht(dhtPin, DHTTYPE);
+
+// Session gate: the control loop + telemetry only run while a session is
+// active in the DrySense app (start/stopped via the Start/Stop buttons).
+bool sessionRunning = false;
+String sessionProduct = "";
+unsigned long lastCommandPoll = 0;
 
 // Latest good sensor values (persisted across failed reads so the push
 // timer can still send a recent, sane reading). ctrlTempC is never
@@ -73,6 +80,7 @@ float lastTempC = NAN;      // good-for-display / push
 float lastHum   = NAN;
 float ctrlTempC = 0.0;      // last known-good temp driving the relays
 bool  fan1Active = false;
+bool  readingReady = false; // true once a fresh read arrived this session
 unsigned long lastSensorRead = 0;
 unsigned long lastLcdUpdate  = 0;
 unsigned long lastPush       = 0;
@@ -105,6 +113,76 @@ void wifiKeepAlive() {
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiTry >= WIFI_RETRY_MS) {
     lastWifiTry = millis();
     connectWiFi();
+  }
+}
+
+// ── Poll the Start/Stop command from the backend ─────────────────────────────
+// GET /api/device/command → { "running": true|false, "product": "..." }
+void pollCommand() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  // First poll fires immediately after boot; afterwards every COMMAND_POLL_MS
+  if (lastCommandPoll != 0 && millis() - lastCommandPoll < COMMAND_POLL_MS) return;
+  lastCommandPoll = millis();
+
+  HTTPClient http;
+  http.setConnectTimeout(3000);
+  http.setTimeout(3000);
+  http.begin(String(SERVER_HOST) + "/api/device/command");
+  int code = http.GET();
+  String body = (code >= 200 && code < 300) ? http.getString() : "";
+  http.end();
+
+  if (code < 200 || code >= 300) {
+    Serial.printf("[cmd] poll failed — HTTP %d (control state kept)\n", code);
+    return;  // failed polls never change the running state
+  }
+
+  // Lightweight parse (avoids a JSON library dependency)
+  bool runningNow = body.indexOf("\"running\":true") >= 0;
+  String productNow = "";
+  if (runningNow) {
+    int p = body.indexOf("\"product\":\"");
+    if (p >= 0) {
+      int s = p + 11;
+      productNow = body.substring(s, body.indexOf('"', s));
+    }
+  }
+
+  if (runningNow != sessionRunning) {
+    sessionRunning = runningNow;
+    sessionProduct = productNow;
+    if (sessionRunning) {
+      // Start pressed: read + push immediately, begin fan-2 cycle fresh
+      previousMillis = millis();
+      lastSensorRead = 0;
+      lastLcdUpdate = 0;
+      lastPush = 0;
+      readingReady = false;
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(sessionProduct.length() ? String("Dry: ") + sessionProduct : String("Drying started"));
+      lcd.setCursor(0, 1);
+      lcd.print("Running...");
+      Serial.println("[cmd] START received — control loop running");
+      blink(1);
+    } else {
+      // Stop pressed: everything off, fan-2 cycle reset
+      fan2State = false;
+      previousMillis = millis();
+      digitalWrite(fan1RelayPin, HIGH);   // Fan 1 OFF (active-LOW)
+      digitalWrite(fan2RelayPin, HIGH);   // Fan 2 OFF (active-LOW)
+      digitalWrite(bulbRelayPin, HIGH);   // Bulb OFF (active-LOW)
+      digitalWrite(statusLedPin, LOW);
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("System Stopped");
+      lcd.setCursor(0, 1);
+      lcd.print("Start in app");
+      Serial.println("[cmd] STOP received — relays off, telemetry paused");
+      blink(1);
+    }
+  } else if (sessionRunning && productNow != sessionProduct && productNow.length()) {
+    sessionProduct = productNow;
   }
 }
 
@@ -209,6 +287,13 @@ void loop() {
   const unsigned long currentMillis = millis();
 
   wifiKeepAlive();
+  pollCommand();
+
+  // ── SESSION GATE: everything below only runs while session is active ──────
+  if (!sessionRunning) {
+    delay(10);   // stopped: relays are OFF (forced at STOP transition)
+    return;
+  }
 
   // ── FAN 2 TIMED LOGIC (30 s ON / 15 s OFF) ────────────────────────────────
   if (fan2State) {
@@ -246,6 +331,7 @@ void loop() {
       ctrlTempC = tempC;  // control keeps the last known-good temperature
       lastTempC = tempC;
       lastHum = hum;
+      readingReady = true;
       Serial.printf("[dht] T: %.1f°C  H: %.1f%%  F1: %s  Bulb: %s  F2: %s\n",
                     tempC, hum,
                     tempC >= tempThreshold ? "ON" : "OFF",
@@ -271,7 +357,7 @@ void loop() {
   }
 
   // ── CLOUD PUSH (every 10 s with the latest good reading) ───────────────────
-  if (!isnan(lastTempC) && !isnan(lastHum) && currentMillis - lastPush >= PUSH_INTERVAL_MS) {
+  if (readingReady && currentMillis - lastPush >= PUSH_INTERVAL_MS) {
     lastPush = currentMillis;
     bool ok = postReading(lastTempC, lastHum);
     digitalWrite(statusLedPin, ok ? HIGH : LOW);  // LED solid = backend reachable
