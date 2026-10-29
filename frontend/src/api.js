@@ -1,29 +1,65 @@
 import { Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-// ── How the phone finds the backend ──────────────────────────────────────────
-// On a REAL phone (Expo Go) the app must reach the PC over your shared WiFi.
-// (10.0.2.2 only works inside the Android studio emulator, not on phones.)
-// If your PC's Wi-Fi IP changes (check with `ipconfig`), update LAN_IP here —
-// or just set a different URL in the app's Settings tab, which overrides it.
-// NOTE: PC and phone must be on the same WiFi network.
+// ── How the phone/app finds the backend ──────────────────────────────────────
+// On a REAL phone (Expo Go) the app must reach the PC over the SAME WiFi.
+// 10.0.2.2 only works inside the Android emulator, not on phones.
+// • If your PC's Wi-Fi IP changes (check with `ipconfig`), update LAN_IP here,
+//   or set a URL in the app's Settings tab (it overrides this default).
+// • PC and phone must be on the same WiFi network ("Tarun 23").
 const LAN_IP = '172.20.52.220'
+const API_HOSTS = Platform.OS === 'web'
+  ? ['http://localhost:4000']
+  : [`http://${LAN_IP}:4000`, 'http://10.0.2.2:4000']  // phone first, emulator fallback
 
-const DEFAULT_URL = Platform.OS === 'web'
-  ? 'http://localhost:4000/api'
-  : `http://${LAN_IP}:4000/api`
+let currentApiBase = API_HOSTS[0] + '/api'
 
-let currentApiBase = DEFAULT_URL
+// Quick 1.5 s health probe used to auto-pick a working backend URL
+async function probeApiUrl(host) {
+  try {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 1500)
+    const res = await fetch(`${host}/api/health`, { signal: ctrl.signal })
+    clearTimeout(t)
+    const data = await res.json().catch(() => ({ ok: false }))
+    return !!data.ok
+  } catch (_) {
+    return false
+  }
+}
 
 export async function initApiBase() {
   try {
     const saved = await AsyncStorage.getItem('drysense_api_base')
-    if (saved) currentApiBase = saved
+    if (saved) {
+      currentApiBase = saved
+      return currentApiBase
+    }
   } catch (_) {}
+  // No saved setting — try each host and keep the first that answers
+  for (const host of API_HOSTS) {
+    if (await probeApiUrl(host)) {
+      currentApiBase = `${host}/api`
+      return currentApiBase
+    }
+  }
   return currentApiBase
 }
 
 export function getApiBase() { return currentApiBase }
+
+export async function setApiBase(url) {
+  const trimmed = (url || '').trim().replace(/\/+$/, '')
+  try {
+    if (trimmed) {
+      await AsyncStorage.setItem('drysense_api_base', trimmed)
+    } else {
+      await AsyncStorage.removeItem('drysense_api_base')
+    }
+  } catch (_) {}
+  currentApiBase = trimmed || `${API_HOSTS[0]}/api`
+  return currentApiBase
+}
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 const AUTH_KEY = 'drysense_auth_user'
