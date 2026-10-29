@@ -8,11 +8,10 @@ import {
   ActivityIndicator,
   Modal,
   TouchableWithoutFeedback,
-  Platform,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { THEME } from '../theme'
-import { analyzeProduct, startSession, stopSession, addReading, fetchSessions } from '../api'
+import { analyzeProduct, startSession, stopSession, fetchSessions, fetchLatestSensor, fetchSensorDevices } from '../api'
 
 const PRODUCTS = [
   { id: 'Coconut',  icon: 'nutrition-outline',      color: '#f59e0b', desc: 'Copra & kernel drying' },
@@ -366,19 +365,13 @@ export function DashboardTab({ onSessionChange }) {
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
 
-  // Real-time Chamber Readings (ALWAYS VISIBLE)
-  // Ambient base: ~32-35°C, humidity ~55-65%
-  // Drying active: ~45-55°C, humidity ~22-38%
-  const [chamberTemp, setChamberTemp] = useState(33.8)
-  const [chamberHumid, setChamberHumid] = useState(58.2)
+  // Real DHT11 sensor values (pulled from the backend every few seconds)
+  const [chamberTemp, setChamberTemp] = useState(null)
+  const [chamberHumid, setChamberHumid] = useState(null)
+  const [sensorOnline, setSensorOnline] = useState(false)
 
   const timerRef = useRef(null)
   const sensorRef = useRef(null)
-  const sessionRef = useRef(null)
-
-  useEffect(() => {
-    sessionRef.current = activeSession
-  }, [activeSession])
 
   // Check on mount if any running session already exists
   useEffect(() => {
@@ -417,68 +410,60 @@ export function DashboardTab({ onSessionChange }) {
     return () => { isCancelled = true }
   }, [product, moisture])
 
-  // Live timer tick (1s)
+  // Live timer tick (1s) — state changes deferred to timers so setState
+  // isn't called synchronously inside the effect body
   useEffect(() => {
     clearInterval(timerRef.current)
     if (activeSession?.status === 'running') {
       const startMs = new Date(activeSession.startedAt).getTime()
-      setElapsedMs(Math.max(0, Date.now() - startMs))
+      const initial = setTimeout(() => setElapsedMs(Math.max(0, Date.now() - startMs)), 0)
       timerRef.current = setInterval(() => {
         setElapsedMs(Math.max(0, Date.now() - startMs))
       }, 1000)
-    } else {
-      setElapsedMs(0)
+      return () => { clearTimeout(initial); clearInterval(timerRef.current) }
     }
-    return () => clearInterval(timerRef.current)
+    const reset = setTimeout(() => setElapsedMs(0), 0)
+    return () => { clearTimeout(reset); clearInterval(timerRef.current) }
   }, [activeSession])
 
-  // Continuous sensor readings update (every 3 seconds)
-  // ALWAYS updates so temperature and humidity are always active on the dashboard!
+  // ── Real sensor polling (every 3 s) — drives the Chamber Readings card ─────
+  // Source of truth: DHT11 → ESP32 → POST /api/sensor/data → MongoDB.
+  // No simulation: when the sensor isn't sending (before Start, or offline),
+  // the gauges honestly show "--".
   useEffect(() => {
     clearInterval(sensorRef.current)
 
+    let tick = 0
+    let active = true
+    let deviceId = 'esp32-01'
+
+    // Re-resolve which device to read occasionally (auto-detects the ESP32's id)
+    const pullDevice = async () => {
+      try {
+        const res = await fetchSensorDevices()
+        if (res.success && res.data?.length) deviceId = res.data[0].deviceId
+      } catch (_) {}
+    }
+
     sensorRef.current = setInterval(async () => {
-      const current = sessionRef.current
-      const isRunning = current?.status === 'running'
+      if (tick % 10 === 0) await pullDevice()  // refresh device choice ~every 30 s
+      tick++
 
-      if (isRunning) {
-        const startMs = new Date(current.startedAt).getTime()
-        const elapsed = Date.now() - startMs
-
-        // Temperature rises toward target (48°C - 55°C)
-        const targetTemp = current.product === 'Chilli' ? 54 : current.product === 'Coconut' ? 50 : 46
-        const riseFactor = Math.min(1, elapsed / 120000) // reaches near target in ~2 min of simulated time
-        const baseT = 34 + (targetTemp - 34) * riseFactor
-        const jitterT = (Math.random() * 1.6 - 0.8)
-        const newTemp = Number((baseT + jitterT).toFixed(1))
-
-        // Humidity drops as drying progresses
-        const dropFactor = Math.min(0.7, (elapsed / 300000))
-        const baseH = Math.max(20, 58 - dropFactor * 45)
-        const jitterH = (Math.random() * 2.0 - 1.0)
-        const newHumid = Number((baseH + jitterH).toFixed(1))
-
-        setChamberTemp(newTemp)
-        setChamberHumid(newHumid)
-
-        // Record reading to session
-        await addReading(current.id, newTemp, newHumid)
-      } else {
-        // Idle/ambient readings fluctuating gently around ambient room conditions
-        setChamberTemp((prev) => {
-          const delta = (Math.random() * 0.6 - 0.3)
-          const next = Number(Math.max(28, Math.min(37, prev + delta)).toFixed(1))
-          return next
-        })
-        setChamberHumid((prev) => {
-          const delta = (Math.random() * 1.0 - 0.5)
-          const next = Number(Math.max(48, Math.min(68, prev + delta)).toFixed(1))
-          return next
-        })
-      }
+      const res = await fetchLatestSensor(deviceId)
+      if (!active) return
+      const data = res?.success && res.data?.available ? res.data : null
+      const reading = data?.reading || null
+      setChamberTemp(reading ? Number(Number(reading.temperature).toFixed(1)) : null)
+      setChamberHumid(reading ? Number(Number(reading.humidity).toFixed(1)) : null)
+      setSensorOnline(!!(data && data.online))
     }, 3000)
 
-    return () => clearInterval(sensorRef.current)
+    pullDevice()
+
+    return () => {
+      active = false
+      clearInterval(sensorRef.current)
+    }
   }, [])
 
   // Start Drying Process
@@ -692,10 +677,10 @@ export function DashboardTab({ onSessionChange }) {
         <View style={s.cardHead}>
           <Ionicons name="hardware-chip-outline" size={18} color={THEME.colors.temp} />
           <Text style={s.cardTitle}>Chamber Sensor Readings</Text>
-          <View style={[s.sensorStatusBadge, isRunning ? s.badgeActive : s.badgeIdle]}>
-            <View style={[s.sensorPulseDot, isRunning ? s.pulseActive : s.pulseIdle]} />
-            <Text style={[s.sensorStatusText, isRunning ? s.pulseTextActive : s.pulseTextIdle]}>
-              {isRunning ? 'Live Drying Readings' : 'Ambient Chamber Sensors'}
+          <View style={[s.sensorStatusBadge, sensorOnline ? s.badgeActive : s.badgeIdle]}>
+            <View style={[s.sensorPulseDot, sensorOnline ? s.pulseActive : s.pulseIdle]} />
+            <Text style={[s.sensorStatusText, sensorOnline ? s.pulseTextActive : s.pulseTextIdle]}>
+              {sensorOnline ? 'Live DHT11 Reading' : 'Waiting for sensor…'}
             </Text>
           </View>
         </View>
@@ -708,7 +693,7 @@ export function DashboardTab({ onSessionChange }) {
             value={chamberTemp}
             unit="°C"
             color={THEME.colors.temp}
-            statusText={isRunning ? 'Heating' : 'Ambient'}
+            statusText={sensorOnline ? 'From DHT11' : null}
           />
 
           {/* Humidity reading */}
@@ -718,7 +703,7 @@ export function DashboardTab({ onSessionChange }) {
             value={chamberHumid}
             unit="%"
             color={THEME.colors.humidity}
-            statusText={isRunning ? 'Dehumidifying' : 'Ambient'}
+            statusText={sensorOnline ? 'From DHT11' : null}
           />
         </View>
 
