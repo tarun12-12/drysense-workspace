@@ -29,9 +29,9 @@
 #include <DHT.h>
 
 // ── CONFIG — edit these ──────────────────────────────────────────────────────
-const char* WIFI_SSID     = "YOUR_WIFI_NAME";          // your 2.4 GHz WiFi network
+const char* WIFI_SSID     = "YOUR_WIFI_NAME";       // your 2.4 GHz WiFi network
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";       // your WiFi password
-const char* SERVER_HOST   = "http://192.168.1.4:4000"; // backend: http://<PC-IP>:4000
+const char* SERVER_HOST   = "http://<PC-IP>:4000"; // backend: http://<PC-IP>:4000
 const char* DEVICE_ID     = "esp32-01";                // unique id for this sensor
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -48,6 +48,15 @@ const int statusLedPin  = 2;   // onboard LED: WiFi/HTTP status
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // ── Relay / threshold constants ──────────────────────────────────────────────
+// Relay polarity: true  = LOW signal turns the relay ON (most blue Songle
+//                        modules, define as-is if fans are inverted)
+//                 false = HIGH signal turns the relay ON (some modules)
+#define RELAY_ACTIVE_LOW true
+
+void relayWrite(int pin, bool on) {
+  digitalWrite(pin, on ? (RELAY_ACTIVE_LOW ? LOW : HIGH) : (RELAY_ACTIVE_LOW ? HIGH : LOW));
+}
+
 // Assuming active-LOW relays: HIGH = OFF, LOW = ON
 const float tempThreshold = 30.0;
 
@@ -187,9 +196,9 @@ void pollCommand() {
       // Stop pressed: everything off, fan-2 cycle reset
       fan2State = false;
       previousMillis = millis();
-      digitalWrite(fan1RelayPin, HIGH);   // Fan 1 OFF (active-LOW)
-      digitalWrite(fan2RelayPin, HIGH);   // Fan 2 OFF (active-LOW)
-      digitalWrite(bulbRelayPin, HIGH);   // Bulb OFF (active-LOW)
+      relayWrite(fan1RelayPin, false);    // Fan 1 OFF
+      relayWrite(fan2RelayPin, false);    // Fan 2 OFF
+      relayWrite(bulbRelayPin, false);    // Bulb OFF
       digitalWrite(statusLedPin, LOW);
       lcd.clear();
       lcd.setCursor(0, 0);
@@ -279,13 +288,13 @@ void renderLcd(float tempC, bool fan1Active) {
 void setup() {
   Serial.begin(115200);
 
-  // Relays — start everything OFF (active-LOW)
+  // Relays — start everything OFF
   pinMode(fan1RelayPin, OUTPUT);
   pinMode(fan2RelayPin, OUTPUT);
   pinMode(bulbRelayPin, OUTPUT);
-  digitalWrite(fan1RelayPin, HIGH);
-  digitalWrite(fan2RelayPin, HIGH);
-  digitalWrite(bulbRelayPin, HIGH);
+  relayWrite(fan1RelayPin, false);
+  relayWrite(fan2RelayPin, false);
+  relayWrite(bulbRelayPin, false);
   pinMode(statusLedPin, OUTPUT);
 
   // I2C with custom SDA (26) / SCL (27) pins
@@ -296,6 +305,18 @@ void setup() {
   dht.begin();
 
   showBootScreen("Climate Monitor", "System Ready", 2000);
+
+  // Relay self-test: each relay clicks ON for 1.5 s, in order. Watch/hear this
+  // to verify wiring. If a fan spins here but never during a session, it's the
+  // polarity: set RELAY_ACTIVE_LOW to false. If it doesn't click even here,
+  // check relay VCC/JD-VCC/GND wiring.
+  relayWrite(fan1RelayPin, true);  showBootScreen("Self-test", "Fan 1 clicks", 1500);
+  relayWrite(fan1RelayPin, false);
+  relayWrite(fan2RelayPin, true);  showBootScreen("", "Fan 2 clicks now", 1500);
+  relayWrite(fan2RelayPin, false);
+  relayWrite(bulbRelayPin, true);  showBootScreen("", "Bulb clicks now", 1500);
+  relayWrite(bulbRelayPin, false);
+  lcd.clear();
 
   connectWiFi();
   showBootScreen("WiFi OK", WiFi.localIP().toString().c_str(), 1500);
@@ -318,13 +339,13 @@ void loop() {
     if (currentMillis - previousMillis >= fanOnDuration) {
       fan2State = false;
       previousMillis = currentMillis;
-      digitalWrite(fan2RelayPin, HIGH);          // Fan 2 OFF (active-LOW)
+      relayWrite(fan2RelayPin, false);           // Fan 2 OFF
     }
   } else {
     if (currentMillis - previousMillis >= fanOffDuration) {
       fan2State = true;
       previousMillis = currentMillis;
-      digitalWrite(fan2RelayPin, LOW);           // Fan 2 ON (active-LOW)
+      relayWrite(fan2RelayPin, true);            // Fan 2 ON
     }
   }
 
@@ -360,11 +381,11 @@ void loop() {
     // ── FAN 1 / BULB LOCK-STEP LOGIC (threshold 30 °C) ──────────────────────
     fan1Active = (ctrlTempC >= tempThreshold);
     if (fan1Active) {
-      digitalWrite(fan1RelayPin, LOW);           // Fan 1 ON
-      digitalWrite(bulbRelayPin, HIGH);          // Bulb OFF (inverse)
+      relayWrite(fan1RelayPin, true);              // Fan 1 ON
+      relayWrite(bulbRelayPin, false);             // Bulb OFF (inverse)
     } else {
-      digitalWrite(fan1RelayPin, HIGH);          // Fan 1 OFF
-      digitalWrite(bulbRelayPin, LOW);           // Bulb ON (inverse)
+      relayWrite(fan1RelayPin, false);             // Fan 1 OFF
+      relayWrite(bulbRelayPin, true);              // Bulb ON (inverse)
     }
   }
 
