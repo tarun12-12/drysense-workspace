@@ -1,9 +1,17 @@
 import { Platform } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
+// ── How the phone finds the backend ──────────────────────────────────────────
+// On a REAL phone (Expo Go) the app must reach the PC over your shared WiFi.
+// (10.0.2.2 only works inside the Android studio emulator, not on phones.)
+// If your PC's Wi-Fi IP changes (check with `ipconfig`), update LAN_IP here —
+// or just set a different URL in the app's Settings tab, which overrides it.
+// NOTE: PC and phone must be on the same WiFi network.
+const LAN_IP = '172.20.52.220'
+
 const DEFAULT_URL = Platform.OS === 'web'
   ? 'http://localhost:4000/api'
-  : 'http://10.0.2.2:4000/api'
+  : `http://${LAN_IP}:4000/api`
 
 let currentApiBase = DEFAULT_URL
 
